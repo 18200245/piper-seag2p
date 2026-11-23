@@ -19,6 +19,7 @@ class PhonemeType(str, Enum):
     JAPANESE = "japanese"  # ja-JP: OpenJTalk + pitch accent -> IPA
     THAI = "thai"  # th-TH: TLTK segmentation + G2P -> IPA + tone digits
     LITHUANIAN = "lithuanian"  # lt-LT: espeak-ng IPA + pitch accent dictionary
+    VIETNAMESE = "vietnamese"  # vi-VN: sea-g2p normalization + G2P -> IPA + tones
 
 
 @dataclass

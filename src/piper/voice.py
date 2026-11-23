@@ -261,6 +261,17 @@ class PiperVoice:
 
             return phonemizer.phonemize(text)
 
+        if self.config.phoneme_type == PhonemeType.VIETNAMESE:
+            from .phonemize_vietnamese import VietnamesePhonemizer
+
+            # sea-g2p normalization + G2P -> IPA + tones (default IPA id map)
+            phonemizer = getattr(self, "_vietnamese_phonemizer", None)
+            if phonemizer is None:
+                phonemizer = VietnamesePhonemizer()
+                setattr(self, "_vietnamese_phonemizer", phonemizer)
+
+            return phonemizer.phonemize(text)
+
         if self.config.phoneme_type == PhonemeType.LITHUANIAN:
             from .phonemize_lithuanian import LithuanianPhonemizer
 

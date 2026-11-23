@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add Vietnamese phonemizer using sea-g2p in the new `vi` extra
+    - `--data.phoneme_type vietnamese` for training; `"phoneme_type": "vietnamese"` in a voice config for synthesis
+    - sea-g2p expands numbers, dates and abbreviations and emits IPA with tones; all symbols are in the default IPA id map, so voices stay compatible with the espeak warmstart
+
 - Write a valid, empty WAV file when the text has nothing to speak
     - `PiperVoice.synthesize_wav`, the `piper` command and `/synthesize` in `piper.http_server` set the WAV format from the first audio chunk, so empty input left the format unset and closing the file raised `wave.Error: # channels not specified`
     - The format now comes from the voice config before synthesis starts

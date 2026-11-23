@@ -261,6 +261,15 @@ class VitsDataModule(L.LightningDataModule):
             def phonemize(text: str) -> list[list[str]]:
                 return thai_phonemizer.phonemize(text)
 
+        elif self.phoneme_type == PhonemeType.VIETNAMESE:
+            from piper.phonemize_vietnamese import VietnamesePhonemizer
+
+            # sea-g2p normalization + G2P -> IPA + tones (default IPA id map)
+            vietnamese_phonemizer = VietnamesePhonemizer()
+
+            def phonemize(text: str) -> list[list[str]]:
+                return vietnamese_phonemizer.phonemize(text)
+
         elif self.phoneme_type == PhonemeType.LITHUANIAN:
             from piper.phonemize_lithuanian import LithuanianPhonemizer
 

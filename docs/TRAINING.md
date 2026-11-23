@@ -106,6 +106,10 @@ utt2.wav|speaker_2|Text for utterance 2 with second speaker.
 
 where `speaker_1` and `speaker_2` are the **names** of the speakers. When training begins, Piper will count up the number of unique speaker names and create a mapping between speaker names and ids. This mapping will be saved in the `config.json` file for the voice (`--data.config_path`).
 
+### Vietnamese (sea-g2p)
+
+Install the `vi` extra (`pip install -e .[train,vi]`) and train with `--data.phoneme_type vietnamese`. Numbers, dates and abbreviations are expanded by [sea-g2p](https://github.com/pnnbao97/sea-g2p), which emits IPA with tones using the default phoneme id map, so `--ckpt_path` fine-tuning from an espeak-based checkpoint works.
+
 ### Custom Phonemes
 
 If you want to skip phonemization with `espeak-ng`, set `--data.phoneme_type text` and use the CSV format:

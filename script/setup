@@ -16,6 +16,7 @@ parser.add_argument(
 parser.add_argument("--zh", action="store_true", help="Install Chinese requirements")
 parser.add_argument("--ja", action="store_true", help="Install Japanese requirements")
 parser.add_argument("--th", action="store_true", help="Install Thai requirements")
+parser.add_argument("--vi", action="store_true", help="Install Vietnamese requirements")
 parser.add_argument(
     "--http", action="store_true", help="Install HTTP server requirements"
 )
@@ -73,6 +74,9 @@ if args.ja:
 
 if args.th:
     extras.append("th")
+
+if args.vi:
+    extras.append("vi")
 
 if args.http:
     extras.append("http")

@@ -137,6 +137,10 @@ setup(
             "requests>=2,<3",
             "unicode-rbnf>=2.4.0,<3",
         ],
+        "vi": [
+            # Vietnamese text normalization + G2P (Rust core, abi3 wheels)
+            "sea-g2p>=0.10,<1",
+        ],
     },
     packages=[
         "piper",

@@ -53,6 +53,7 @@ def main() -> None:
     japanese_phonemizer = None
     thai_phonemizer = None
     lithuanian_phonemizer = None
+    vietnamese_phonemizer = None
 
     model = VitsModel.load_from_checkpoint(args.checkpoint, map_location="cpu")
 
@@ -107,6 +108,13 @@ def main() -> None:
                 thai_phonemizer = ThaiPhonemizer()
 
             sentence_phonemes = thai_phonemizer.phonemize(text)
+        elif config.phoneme_type == PhonemeType.VIETNAMESE:
+            from ..phonemize_vietnamese import VietnamesePhonemizer
+
+            if vietnamese_phonemizer is None:
+                vietnamese_phonemizer = VietnamesePhonemizer()
+
+            sentence_phonemes = vietnamese_phonemizer.phonemize(text)
         elif config.phoneme_type == PhonemeType.LITHUANIAN:
             from ..phonemize_lithuanian import LithuanianPhonemizer
 
