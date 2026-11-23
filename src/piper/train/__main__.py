@@ -20,6 +20,15 @@ _LOGGER = logging.getLogger(__package__)
 _MONITOR = "val_mel"
 
 
+class _OptionalModelCheckpoint(ModelCheckpoint):
+    """ModelCheckpoint that silently skips saving when its monitored metric was not logged."""
+
+    def _save_topk_checkpoint(self, trainer, monitor_candidates) -> None:
+        if self.monitor and (self.monitor not in monitor_candidates):
+            return
+        super()._save_topk_checkpoint(trainer, monitor_candidates)
+
+
 def _default_callbacks() -> list:
     """Fresh checkpoint callbacks; each holds per-run state, so never share."""
     return [
@@ -33,10 +42,9 @@ def _default_callbacks() -> list:
         ),
         # Also keep the best-by-perceptual-quality checkpoints. "val_mos" (UTMOS)
         # tracks audible artifacts that mel L1 misses, so its winner is often the
-        # better-sounding model. If the MOS predictor can't be loaded, val_mos is
-        # never logged and this callback simply finds nothing to save (Lightning
-        # warns once and skips) -- it does not interfere with the others.
-        ModelCheckpoint(
+        # better-sounding model. If the MOS predictor is disabled or can't be
+        # loaded, val_mos is never logged and this callback simply skips saving.
+        _OptionalModelCheckpoint(
             monitor="val_mos",
             mode="max",
             save_top_k=5,
