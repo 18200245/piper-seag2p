@@ -481,6 +481,9 @@ class VitsDataModule(L.LightningDataModule):
             )
 
     def setup(self, stage: str) -> None:
+        if self.piper_config is None and self.config_path.exists():
+            with open(self.config_path, "r", encoding="utf-8") as config_file:
+                self.piper_config = PiperConfig.from_dict(json.load(config_file))
         assert self.piper_config is not None
 
         all_utts: list[CachedUtterance] = []
