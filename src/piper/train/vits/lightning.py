@@ -4,10 +4,13 @@ import ast
 import logging
 import operator
 import os
+import wave
 from functools import reduce
+from pathlib import Path
 from typing import Optional
 
 import lightning as L
+import numpy as np
 import torch
 from torch import autocast
 from torch.nn import functional as F
@@ -140,6 +143,13 @@ class VitsModel(L.LightningModule):
         # (or "none") to disable. Logged as "val_mos" -- a perceptual-quality
         # signal that can be monitored for early stopping (mode="max").
         mos_metric: Optional[str] = "utmos",
+        # Keep only the N most recent epoch checkpoints (disables val_mel/val_mos top-k saves).
+        keep_last_k: Optional[int] = None,
+        # Synthesize and write WAV samples to <default_root_dir>/samples/ after each epoch.
+        save_samples: bool = True,
+        sample_text: Optional[str] = (
+            "Chương hai nghìn tám trăm mười. Xin chào, đây là giọng đọc thử nghiệm tiếng Việt."
+        ),
         # unused
         dataset: object = None,
         **kwargs,
@@ -673,11 +683,19 @@ class VitsModel(L.LightningModule):
             and hasattr(self.logger.experiment, "add_audio")
         )
         mos_enabled = self._mos_predictor is not None
+        save_samples = bool(getattr(self.hparams, "save_samples", True))
 
-        if not (has_audio_logger or mos_enabled):
+        if not (has_audio_logger or mos_enabled or save_samples):
             return
 
+        samples_dir: Optional[Path] = None
+        if save_samples and getattr(self.trainer, "is_global_zero", True):
+            root_dir = getattr(self.trainer, "default_root_dir", None) or os.getcwd()
+            samples_dir = Path(root_dir) / "samples"
+            samples_dir.mkdir(parents=True, exist_ok=True)
+
         mos_scores = []
+        prompt_lines = [f"Epoch: {self.current_epoch} (global_step={self.global_step})"]
         for utt_idx, test_utt in enumerate(self.trainer.datamodule.test_dataset):
             text = test_utt.phoneme_ids.unsqueeze(0).to(self.device)
             text_lengths = torch.LongTensor([len(test_utt.phoneme_ids)]).to(self.device)
@@ -695,6 +713,20 @@ class VitsModel(L.LightningModule):
                 score = self._mos_predictor.score(test_audio, self.hparams.sample_rate)
                 if score is not None:
                     mos_scores.append(score)
+
+            if samples_dir is not None and utt_idx == 0:
+                try:
+                    self._write_sample_wav(
+                        samples_dir / f"epoch_{self.current_epoch:04d}_test.wav",
+                        test_audio,
+                    )
+                    self._write_sample_wav(
+                        samples_dir / "latest_test.wav",
+                        test_audio,
+                    )
+                    prompt_lines.append(f"test_00: {test_utt.text or ''}")
+                except Exception:  # pragma: no cover
+                    _LOGGER.debug("Failed to write test sample wav", exc_info=True)
 
             if has_audio_logger:
                 # Requires tensorboard. Scale to make louder in [-1, 1].
@@ -726,9 +758,97 @@ class VitsModel(L.LightningModule):
                 )
                 self._log_audio_text(tag, test_utt.text)
 
+        if samples_dir is not None:
+            self._synthesize_custom_sample(samples_dir, prompt_lines)
+
         if mos_scores:
             val_mos = sum(mos_scores) / len(mos_scores)
             self.log("val_mos", val_mos, prog_bar=True, sync_dist=True)
+
+    def _write_sample_wav(self, wav_path: Path, audio_tensor: torch.Tensor) -> None:
+        audio = audio_tensor.detach().cpu().float().numpy().squeeze()
+        if audio.ndim == 0 or audio.size == 0:
+            return
+        peak = max(0.01, float(np.max(np.abs(audio))))
+        pcm = np.clip((audio / peak) * 32767.0, -32768.0, 32767.0).astype(np.int16)
+        with wave.open(str(wav_path), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(int(self.hparams.sample_rate))
+            wav_file.writeframes(pcm.tobytes())
+
+    def _synthesize_custom_sample(
+        self, samples_dir: Path, prompt_lines: list[str]
+    ) -> None:
+        sample_text = getattr(self.hparams, "sample_text", None)
+        if sample_text:
+            try:
+                from piper.config import PhonemeType
+                from piper.phoneme_ids import DEFAULT_PHONEME_ID_MAP, phonemes_to_ids
+
+                datamodule = getattr(self.trainer, "datamodule", None)
+                piper_config = getattr(datamodule, "piper_config", None)
+                id_map = (
+                    piper_config.phoneme_id_map
+                    if piper_config is not None
+                    else DEFAULT_PHONEME_ID_MAP
+                )
+                phoneme_type = (
+                    piper_config.phoneme_type
+                    if piper_config is not None
+                    else PhonemeType.VIETNAMESE
+                )
+
+                if phoneme_type == PhonemeType.VIETNAMESE:
+                    from piper.phonemize_vietnamese import VietnamesePhonemizer
+
+                    phonemizer = getattr(self, "_sample_vi_phonemizer", None)
+                    if phonemizer is None:
+                        phonemizer = VietnamesePhonemizer()
+                        setattr(self, "_sample_vi_phonemizer", phonemizer)
+                    sentences = phonemizer.phonemize(sample_text)
+                else:
+                    sentences = []
+
+                all_ids: list[int] = []
+                for sent in sentences:
+                    all_ids.extend(phonemes_to_ids(sent, id_map))
+
+                if all_ids:
+                    text = torch.LongTensor(all_ids).unsqueeze(0).to(self.device)
+                    text_lengths = torch.LongTensor([len(all_ids)]).to(self.device)
+                    sid = (
+                        torch.LongTensor([0]).to(self.device)
+                        if self.hparams.num_speakers > 1
+                        else None
+                    )
+                    with torch.inference_mode():
+                        sample_audio = self(
+                            text, text_lengths, [0.667, 1.0, 0.8], sid=sid
+                        ).detach()
+                    self._write_sample_wav(
+                        samples_dir / f"epoch_{self.current_epoch:04d}_sample.wav",
+                        sample_audio,
+                    )
+                    self._write_sample_wav(
+                        samples_dir / "latest_sample.wav",
+                        sample_audio,
+                    )
+                    prompt_lines.append(f"sample: {sample_text}")
+            except Exception:  # pragma: no cover
+                _LOGGER.debug("Failed to synthesize custom sample", exc_info=True)
+
+        try:
+            (samples_dir / "prompts.txt").write_text(
+                "\n".join(prompt_lines) + "\n", encoding="utf-8"
+            )
+            keep = max(int(getattr(self.hparams, "keep_last_k", 0) or 5), 5)
+            for suffix in ("_sample.wav", "_test.wav"):
+                files = sorted(samples_dir.glob(f"epoch_*{suffix}"))
+                for old_wav in files[: max(0, len(files) - keep)]:
+                    old_wav.unlink(missing_ok=True)
+        except Exception:  # pragma: no cover
+            pass
 
     def _resolve_lr_decay(
         self, explicit: Optional[float], fallback: float, name: str

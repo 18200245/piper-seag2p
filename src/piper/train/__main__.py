@@ -1,4 +1,7 @@
 import logging
+import os
+import shutil
+from pathlib import Path
 
 import torch
 from lightning.pytorch.callbacks import ModelCheckpoint
@@ -21,18 +24,73 @@ _MONITOR = "val_mel"
 
 
 class _OptionalModelCheckpoint(ModelCheckpoint):
-    """ModelCheckpoint that silently skips saving when its monitored metric was not logged."""
+    """ModelCheckpoint that silently skips saving when its monitored metric was not logged or keep_last_k is active."""
 
     def _save_topk_checkpoint(self, trainer, monitor_candidates) -> None:
+        keep_last_k = getattr(
+            getattr(trainer.lightning_module, "hparams", None), "keep_last_k", None
+        )
+        if keep_last_k and keep_last_k > 0:
+            return
         if self.monitor and (self.monitor not in monitor_candidates):
             return
         super()._save_topk_checkpoint(trainer, monitor_candidates)
 
 
+class _LastAndRollingCheckpoint(ModelCheckpoint):
+    """Writes last.ckpt every epoch, and when model.keep_last_k > 0 maintains the N most recent epoch=XXXX.ckpt files."""
+
+    def on_train_epoch_end(self, trainer, pl_module) -> None:
+        keep_last_k = getattr(getattr(pl_module, "hparams", None), "keep_last_k", None)
+        ckpt_dir = Path(self.dirpath) if self.dirpath else None
+        last_path = (ckpt_dir / "last.ckpt") if ckpt_dir else None
+
+        # Detach last.ckpt from the previous epoch's hardlink before Lightning writes the new last.ckpt
+        if keep_last_k and keep_last_k > 0 and last_path and last_path.exists():
+            try:
+                if last_path.stat().st_nlink > 1:
+                    last_path.unlink()
+            except OSError:
+                pass
+
+        super().on_train_epoch_end(trainer, pl_module)
+
+        if not (keep_last_k and keep_last_k > 0):
+            return
+
+        ckpt_dir = Path(self.dirpath) if self.dirpath else None
+        if not ckpt_dir:
+            return
+        last_path = ckpt_dir / "last.ckpt"
+        if not last_path.exists():
+            return
+
+        epoch_path = ckpt_dir / f"epoch={trainer.current_epoch:04d}.ckpt"
+        try:
+            if epoch_path.exists():
+                epoch_path.unlink()
+            try:
+                os.link(last_path, epoch_path)
+            except OSError:
+                shutil.copy2(last_path, epoch_path)
+        except OSError:
+            _LOGGER.debug("Could not create rolling epoch checkpoint", exc_info=True)
+
+        # Keep only the N most recent epoch=XXXX.ckpt files
+        rolling = sorted(
+            p for p in ckpt_dir.glob("epoch=*.ckpt") if "-val_" not in p.name
+        )
+        for old_ckpt in rolling[: max(0, len(rolling) - int(keep_last_k))]:
+            try:
+                old_ckpt.unlink()
+            except OSError:
+                pass
+
+
 def _default_callbacks() -> list:
     """Fresh checkpoint callbacks; each holds per-run state, so never share."""
     return [
-        ModelCheckpoint(
+        _OptionalModelCheckpoint(
             monitor=_MONITOR,
             mode="min",
             save_top_k=5,
@@ -58,7 +116,7 @@ def _default_callbacks() -> list:
         # improved val_mel and every epoch after it was lost -- epochs 1954-1999
         # of a 2,000-epoch run, the ones at the bottom of the LR anneal. With no
         # monitor and save_top_k=1 the file is simply the latest epoch.
-        ModelCheckpoint(
+        _LastAndRollingCheckpoint(
             monitor=None,
             save_top_k=1,
             every_n_epochs=1,
